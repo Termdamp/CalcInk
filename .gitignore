@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+coverage/
+dev-dist/
+*.tsbuildinfo
+.env
+.env.*

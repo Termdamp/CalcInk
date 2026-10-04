@@ -1,0 +1,21 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: #fafaf7;
+}
+
+#board {
+  display: block; /* canvas is inline by default, which leaves a baseline gap and scrollbars */
+  width: 100%;
+  height: 100vh;
+  height: 100dvh; /* on mobile, excludes the collapsing browser bars */
+  touch-action: none; /* we own all touch gestures on the canvas (Step 4) */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: crosshair;
+}

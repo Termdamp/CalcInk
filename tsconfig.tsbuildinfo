@@ -1,1 +1,1 @@
-{"root":["./src/counter.ts","./src/main.ts"],"errors":true,"version":"6.0.3"}
+{"root":["./src/main.ts","./src/types.ts","./src/canvas/index.ts","./src/math/index.ts","./src/recognition/index.ts","./src/strokes/index.ts","./src/ui/index.ts","./src/workers/index.ts","./tests/smoke.test.ts","./vitest.config.ts"],"version":"6.0.3"}
