@@ -68,3 +68,28 @@ export function installPointerReadout(): void {
       `coalesced ${e.getCoalescedEvents().length}`;
   });
 }
+/** Bottom-right: time from the newest pointer event to the end of the render that drew it. */
+export function installLatencyProbe(renderer: Renderer): void {
+  const el = document.createElement('div');
+  el.className = 'hud hud-right';
+  document.body.append(el);
+
+  let lastInput: number | null = null;
+  const record = (e: PointerEvent): void => {
+    if (e.buttons !== 0) lastInput = e.timeStamp; // only while drawing, not hover
+  };
+  window.addEventListener('pointerdown', record, { capture: true });
+  window.addEventListener('pointermove', record, { capture: true });
+
+  const samples: number[] = [];
+  renderer.onRendered(() => {
+    if (lastInput === null) return;
+    samples.push(performance.now() - lastInput);
+    lastInput = null; // count each input once
+    if (samples.length > 120) samples.shift();
+    const sorted = [...samples].sort((a, b) => a - b);
+    const avg = samples.reduce((sum, v) => sum + v, 0) / samples.length;
+    const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+    el.textContent = `input→render avg ${avg.toFixed(1)} ms · p95 ${p95.toFixed(1)} ms`;
+  });
+}
