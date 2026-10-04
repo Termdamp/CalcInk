@@ -1,2 +1,1 @@
-// canvas module: implemented in a later phase
-export {};
+export { createViewport, type Viewport, type ViewportInfo } from './viewport';

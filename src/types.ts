@@ -43,3 +43,7 @@ export type ParseResult = { ok: true; value: number } | { ok: false; error: Pars
 /** Async because the real work happens in a Web Worker. */
 export type Recognizer = (strokes: Stroke[]) => Promise<RecognizedSymbol[]>;
 export type Parser = (input: string) => ParseResult;
+export interface Size {
+  width: number;
+  height: number;
+}
