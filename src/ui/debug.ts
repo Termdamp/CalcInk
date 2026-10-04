@@ -1,6 +1,5 @@
-import type { Viewport } from '../canvas';
+import type {Renderer, Viewport } from '../canvas';
 import type { Size } from '../types';
-
 /** Bottom-left readout of the three sizes that matter for HiDPI. */
 export function installHud(viewport: Viewport): void {
   const el = document.createElement('div');
@@ -43,4 +42,29 @@ export function drawCrispnessPattern(ctx: CanvasRenderingContext2D, size: Size):
   ctx.font = '11px system-ui, sans-serif';
   ctx.fillText(`canvas ${size.width.toFixed(0)}×${size.height.toFixed(0)} CSS px`, 32, 62);
   ctx.restore();
+}
+/** Press G to toggle the crispness pattern beneath your ink. */
+export function installPatternToggle(renderer: Renderer): void {
+  let on = false;
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'g') return;
+    on = !on;
+    renderer.setUnderlay(on ? drawCrispnessPattern : null);
+    renderer.requestRender();
+  });
+}
+
+/** Top-left readout of what kind of pointer you're using. Invaluable on a phone with no console. */
+export function installPointerReadout(): void {
+  const el = document.createElement('div');
+  el.className = 'hud hud-top';
+  el.textContent = 'draw to see pointer info';
+  document.body.append(el);
+  window.addEventListener('pointermove', (e) => {
+    if (e.buttons === 0) return; // ignore hover
+    el.textContent =
+      `${e.pointerType} · pressure ${e.pressure.toFixed(2)} · ` +
+      `contact ${e.width.toFixed(0)}×${e.height.toFixed(0)} · ` +
+      `coalesced ${e.getCoalescedEvents().length}`;
+  });
 }

@@ -1,2 +1,1 @@
-// strokes module: implemented in a later phase
-export {};
+export { createStrokeStore, type StrokeStore } from './store';

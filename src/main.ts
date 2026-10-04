@@ -1,18 +1,28 @@
 import './style.css';
-import { createViewport } from './canvas';
-import { drawCrispnessPattern, installHud } from './ui/debug';
+import { attachInput, createRenderer, createViewport } from './canvas';
+import { createStrokeStore } from './strokes';
+import { installHud, installPatternToggle, installPointerReadout } from './ui/debug';
+
+const STROKE_WIDTH = 4;
 
 const canvas = document.querySelector<HTMLCanvasElement>('#board');
 if (!canvas) throw new Error('#board not found');
 
 const viewport = createViewport(canvas);
+const store = createStrokeStore();
+const renderer = createRenderer(viewport, store);
 
-const redraw = (): void => {
-  const { ctx, size } = viewport;
-  ctx.clearRect(0, 0, size.width, size.height);
-  drawCrispnessPattern(ctx, size);
-};
-viewport.onChange(redraw);
-redraw(); // createViewport already applied the first size before we subscribed
+attachInput(viewport, {
+  start: (p) => store.begin(p, STROKE_WIDTH),
+  move: (ps) => store.append(ps),
+  end: () => store.end(),
+  cancel: () => store.cancel(),
+});
 
-if (import.meta.env.DEV) installHud(viewport);
+renderer.renderNow();
+
+if (import.meta.env.DEV) {
+  installHud(viewport);
+  installPatternToggle(renderer);
+  installPointerReadout();
+}
