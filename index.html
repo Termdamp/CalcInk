@@ -6,7 +6,10 @@
     <title>CalcInk</title>
   </head>
   <body>
-  <canvas id="board"></canvas>
+  <div id="stage">
+    <canvas id="committed" class="layer"></canvas>
+    <canvas id="live" class="layer"></canvas>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

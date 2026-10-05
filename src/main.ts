@@ -1,28 +1,34 @@
 import './style.css';
 import { attachInput, createRenderer, createViewport } from './canvas';
-import { createStrokeStore } from './strokes';
+import { createDraft, createIdGenerator, createStrokeStore } from './strokes';
 import { installHud, installPatternToggle, installPointerReadout } from './ui/debug';
 
 const STROKE_WIDTH = 4;
 
-const canvas = document.querySelector<HTMLCanvasElement>('#board');
-if (!canvas) throw new Error('#board not found');
+const committedCanvas = document.querySelector<HTMLCanvasElement>('#committed');
+const liveCanvas = document.querySelector<HTMLCanvasElement>('#live');
+if (!committedCanvas || !liveCanvas) throw new Error('canvas layers missing from index.html');
 
-const viewport = createViewport(canvas);
+const committed = createViewport(committedCanvas);
+const live = createViewport(liveCanvas);
 const store = createStrokeStore();
-const renderer = createRenderer(viewport, store);
+const draft = createDraft(createIdGenerator());
+const renderer = createRenderer({ committed, live, store, draft });
 
-attachInput(viewport, {
-  start: (p) => store.begin(p, STROKE_WIDTH),
-  move: (ps) => store.append(ps),
-  end: () => store.end(),
-  cancel: () => store.cancel(),
+attachInput(live, {
+  start: (p) => draft.begin(p, STROKE_WIDTH),
+  move: (ps) => draft.append(ps),
+  end: () => {
+    const stroke = draft.finish();
+    if (stroke) store.add(stroke);
+  },
+  cancel: () => draft.cancel(),
 });
 
 renderer.renderNow();
 
 if (import.meta.env.DEV) {
-  installHud(viewport);
+  installHud(live);
   installPatternToggle(renderer);
   installPointerReadout();
 }

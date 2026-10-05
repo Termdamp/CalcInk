@@ -1,82 +1,141 @@
-import type { Point, Stroke } from '../types';
+import { createEmitter, type Emitter } from '../emitter';
+import type { Stroke } from '../types';
+import { deserializeStrokes, serializeStrokes, type DeserializeResult } from './serialize';
 
-/** Samples closer than this (CSS px) to the previous one are dropped: pure jitter. */
-const MIN_POINT_DISTANCE = 0.5;
+/** A stroke plus the position it occupied, so undo can put it back exactly where it was. */
+export interface IndexedStroke {
+  readonly stroke: Stroke;
+  readonly index: number;
+}
+
+export interface StoreChange {
+  readonly added: readonly Stroke[];
+  readonly removed: readonly Stroke[];
+  /** True when nothing was removed and everything added went to the end: cheap incremental repaint. */
+  readonly append: boolean;
+}
+
+export interface StoreEvents {
+  change: StoreChange;
+}
 
 export interface StrokeStore {
-  /** Committed strokes. A new array instance on every commit, so changes are detectable by reference. */
+  /** Committed strokes in draw order. A NEW array instance after every change. */
   readonly strokes: readonly Stroke[];
-  /** The stroke being drawn right now (mutated in place for speed), or null. */
-  readonly activeStroke: Stroke | null;
-  begin(point: Point, width: number): void;
-  append(points: readonly Point[]): void;
-  end(): void;
-  cancel(): void;
-  subscribe(listener: () => void): () => void;
+  get(id: string): Stroke | undefined;
+  /** Appends a stroke (freezing it). Ignored if the id already exists. */
+  add(stroke: Stroke): void;
+  /** Removes strokes by id; returns what was removed with original indices. */
+  remove(ids: readonly string[]): IndexedStroke[];
+  /** Re-inserts strokes at their recorded indices (the inverse of remove/clear). */
+  insert(entries: readonly IndexedStroke[]): void;
+  clear(): IndexedStroke[];
+  /** Replaces the whole document (open file). Callers should also reset history. */
+  load(strokes: readonly Stroke[]): void;
+  serialize(): string;
+  /** Replaces the document from JSON. On failure the document is untouched. */
+  restore(json: string): DeserializeResult;
+  on: Emitter<StoreEvents>['on'];
+}
+
+function freezeStroke(stroke: Stroke): void {
+  if (Object.isFrozen(stroke)) return;
+  for (const point of stroke.points) Object.freeze(point);
+  Object.freeze(stroke.points);
+  Object.freeze(stroke);
 }
 
 export function createStrokeStore(): StrokeStore {
-  let committed: readonly Stroke[] = [];
-  let active: Stroke | null = null;
-  let counter = 0;
-  // NOT crypto.randomUUID(): it only exists in secure contexts, and http://192.168.x.x
-  // (your phone test!) is not one.
-  const idPrefix = Date.now().toString(36);
-  const listeners = new Set<() => void>();
+  let strokes: readonly Stroke[] = [];
+  const byId = new Map<string, Stroke>();
+  const events = createEmitter<StoreEvents>();
 
-  const notify = (): void => {
-    for (const listener of listeners) listener();
+  const add = (stroke: Stroke): void => {
+    if (byId.has(stroke.id)) return;
+    freezeStroke(stroke);
+    strokes = [...strokes, stroke];
+    byId.set(stroke.id, stroke);
+    events.emit('change', { added: [stroke], removed: [], append: true });
   };
 
-  const end = (): void => {
-    if (!active) return;
-    committed = [...committed, active];
-    active = null;
-    notify();
+  const remove = (ids: readonly string[]): IndexedStroke[] => {
+    const wanted = new Set(ids);
+    const entries: IndexedStroke[] = [];
+    const kept: Stroke[] = [];
+    strokes.forEach((stroke, index) => {
+      if (wanted.has(stroke.id)) entries.push({ stroke, index });
+      else kept.push(stroke);
+    });
+    if (entries.length === 0) return entries;
+    strokes = kept;
+    for (const { stroke } of entries) byId.delete(stroke.id);
+    events.emit('change', {
+      added: [],
+      removed: entries.map((e) => e.stroke),
+      append: false,
+    });
+    return entries;
   };
 
-  const begin = (point: Point, width: number): void => {
-    end(); // defensive: never leave two strokes open
-    counter += 1;
-    active = { id: `${idPrefix}-${counter}`, points: [point], width };
-    notify();
-  };
-
-  const append = (points: readonly Point[]): void => {
-    const stroke = active;
-    if (!stroke) return;
-    let added = false;
-    for (const p of points) {
-      const last = stroke.points[stroke.points.length - 1];
-      if (last && (p.x - last.x) ** 2 + (p.y - last.y) ** 2 < MIN_POINT_DISTANCE ** 2) continue;
-      stroke.points.push(p);
-      added = true;
+  const insert = (entries: readonly IndexedStroke[]): void => {
+    // Ascending order matters: each insertion assumes all lower indices are already in place.
+    const sorted = [...entries].sort((a, b) => a.index - b.index);
+    const next = [...strokes];
+    const added: Stroke[] = [];
+    let append = true;
+    for (const { stroke, index } of sorted) {
+      if (byId.has(stroke.id)) continue;
+      const at = Math.min(index, next.length);
+      if (at !== next.length) append = false;
+      next.splice(at, 0, stroke);
+      byId.set(stroke.id, stroke);
+      added.push(stroke);
     }
-    if (added) notify(); // one notification per batch, not per sample
+    if (added.length === 0) return;
+    strokes = next;
+    events.emit('change', { added, removed: [], append });
   };
 
-  const cancel = (): void => {
-    if (!active) return;
-    active = null;
-    notify();
+  const clear = (): IndexedStroke[] => {
+    const entries = strokes.map((stroke, index) => ({ stroke, index }));
+    if (entries.length === 0) return entries;
+    const removed = strokes;
+    strokes = [];
+    byId.clear();
+    events.emit('change', { added: [], removed, append: false });
+    return entries;
+  };
+
+  const load = (next: readonly Stroke[]): void => {
+    const removed = strokes;
+    const unique: Stroke[] = [];
+    byId.clear();
+    for (const stroke of next) {
+      if (byId.has(stroke.id)) continue;
+      freezeStroke(stroke);
+      byId.set(stroke.id, stroke);
+      unique.push(stroke);
+    }
+    strokes = unique;
+    events.emit('change', { added: unique, removed, append: false });
   };
 
   return {
     get strokes() {
-      return committed;
+      return strokes;
     },
-    get activeStroke() {
-      return active;
+    get: (id) => byId.get(id),
+    add,
+    remove,
+    insert,
+    clear,
+    load,
+    serialize: () => serializeStrokes(strokes),
+    restore(json) {
+      const result = deserializeStrokes(json);
+      if (result.ok) load(result.strokes);
+      return result;
     },
-    begin,
-    append,
-    end,
-    cancel,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    on: events.on,
   };
 }

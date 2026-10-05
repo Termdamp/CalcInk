@@ -1,158 +1,120 @@
-import type { StrokeStore } from '../strokes';
-import type { Point, Size, Stroke } from '../types';
+import type { Draft, StrokeStore } from '../strokes';
+import type { Size, Stroke } from '../types';
+import { applyInk, paintStroke } from './strokePainter';
 import type { Viewport } from './viewport';
 
-/** Drawn beneath the ink (debug patterns now; maybe a grid or ruled lines later). */
+/** Drawn beneath the ink on the committed layer (debug patterns now; maybe ruled lines later). */
 export type Underlay = (ctx: CanvasRenderingContext2D, size: Size) => void;
 
+export interface RendererOptions {
+  committed: Viewport;
+  live: Viewport;
+  store: StrokeStore;
+  draft: Draft;
+}
+
 export interface Renderer {
-  /** Schedule a redraw on the next animation frame (multiple calls coalesce). */
+  /** Mark everything dirty and repaint on the next animation frame. */
   requestRender(): void;
-  /** Redraw synchronously (used on resize so there is no blank frame). */
+  /** Repaint everything synchronously. */
   renderNow(): void;
   setUnderlay(underlay: Underlay | null): void;
-  /** Called at the end of every render. Used by the latency probe. */
+  /** Called after any frame in which something was painted. */
   onRendered(listener: () => void): () => void;
   destroy(): void;
 }
 
-const INK = '#16161d';
-
-const midpoint = (a: Point, b: Point): { x: number; y: number } => ({
-  x: (a.x + b.x) / 2,
-  y: (a.y + b.y) / 2,
-});
-
-/** Pen pressure 0.5 gives the stroke's nominal width; 0 gives 35%; 1 gives 165%. */
-function widthAt(stroke: Stroke, p: Point): number {
-  return p.pressure === undefined ? stroke.width : stroke.width * (0.35 + 1.3 * p.pressure);
-}
-
-function drawDot(ctx: CanvasRenderingContext2D, x: number, y: number, width: number): void {
-  ctx.beginPath();
-  ctx.arc(x, y, width / 2, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** Reference implementation: connect raw samples with straight segments (jagged). */
-function drawStrokePolyline(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  const pts = stroke.points;
-  const first = pts[0];
-  if (!first) return;
-  if (pts.length === 1) {
-    drawDot(ctx, first.x, first.y, stroke.width);
-    return;
-  }
-  ctx.lineWidth = stroke.width;
-  ctx.beginPath();
-  ctx.moveTo(first.x, first.y);
-  for (let i = 1; i < pts.length; i++) {
-    const p = pts[i];
-    if (p) ctx.lineTo(p.x, p.y);
-  }
-  ctx.stroke();
-}
-
-/**
- * Quadratic Bezier through midpoints: each sample is a control point, and each curve ends at
- * the midpoint between two samples. Tangents match at the joins, so there are no corners.
- */
-function drawStrokeSmooth(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  const pts = stroke.points;
-  const first = pts[0];
-  if (!first) return;
-  const last = pts[pts.length - 1] ?? first;
-
-  if (pts.length === 1) {
-    drawDot(ctx, first.x, first.y, widthAt(stroke, first)); // a tap is a dot (decimal point)
-    return;
-  }
-
-  if (first.pressure === undefined) {
-    // Uniform width: one path and one stroke() call. Fastest, and no seams.
-    ctx.lineWidth = stroke.width;
-    ctx.beginPath();
-    ctx.moveTo(first.x, first.y);
-    for (let i = 1; i < pts.length - 1; i++) {
-      const p = pts[i];
-      const next = pts[i + 1];
-      if (!p || !next) continue;
-      const m = midpoint(p, next);
-      ctx.quadraticCurveTo(p.x, p.y, m.x, m.y); // control = sample, end = midpoint
-    }
-    ctx.lineTo(last.x, last.y);
-    ctx.stroke();
-    return;
-  }
-
-  // Pressure-sensitive: stroke each curve piece separately so each can have its own width.
-  // Round line caps hide the seams between pieces.
-  let from: { x: number; y: number } = first;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const p = pts[i];
-    const next = pts[i + 1];
-    if (!p || !next) continue;
-    const m = midpoint(p, next);
-    ctx.lineWidth = widthAt(stroke, p);
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.quadraticCurveTo(p.x, p.y, m.x, m.y);
-    ctx.stroke();
-    from = m;
-  }
-  ctx.lineWidth = widthAt(stroke, last);
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(last.x, last.y);
-  ctx.stroke();
-}
-
-/** Dev-only: open the page with ?smooth=0 to compare against raw lineTo. */
-const SMOOTHING = !(
-  import.meta.env.DEV && new URLSearchParams(location.search).get('smooth') === '0'
-);
-const drawStroke = SMOOTHING ? drawStrokeSmooth : drawStrokePolyline;
-
-export function createRenderer(viewport: Viewport, store: StrokeStore): Renderer {
+export function createRenderer({ committed, live, store, draft }: RendererOptions): Renderer {
   let rafId = 0;
+  let committedFull = true; // committed layer needs a complete repaint
+  let pending: Stroke[] = []; // strokes appended since the last paint (incremental path)
+  let liveDirty = true;
   let underlay: Underlay | null = null;
   const renderedListeners = new Set<() => void>();
 
-  const renderNow = (): void => {
-    if (rafId !== 0) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
+  const paintCommitted = (): void => {
+    const { ctx, size } = committed;
+    applyInk(ctx);
+    if (committedFull) {
+      ctx.clearRect(0, 0, size.width, size.height);
+      underlay?.(ctx, size);
+      applyInk(ctx); // the underlay may have changed the context state
+      for (const stroke of store.strokes) paintStroke(ctx, stroke);
+    } else {
+      for (const stroke of pending) paintStroke(ctx, stroke);
     }
-    const { ctx, size } = viewport;
+    committedFull = false;
+    pending = [];
+  };
+
+  const paintLive = (): void => {
+    const { ctx, size } = live;
     ctx.clearRect(0, 0, size.width, size.height);
-    underlay?.(ctx, size);
-
-    // Context state is reset by every canvas resize, so set it on every render.
-    ctx.strokeStyle = INK;
-    ctx.fillStyle = INK;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    for (const stroke of store.strokes) drawStroke(ctx, stroke);
-    if (store.activeStroke) drawStroke(ctx, store.activeStroke);
-
-    for (const listener of renderedListeners) listener();
+    applyInk(ctx);
+    if (draft.current) paintStroke(ctx, draft.current);
+    liveDirty = false;
   };
 
-  const requestRender = (): void => {
-    if (rafId !== 0) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = 0;
-      renderNow();
-    });
+  const flush = (): void => {
+    rafId = 0;
+    let painted = false;
+    if (committedFull || pending.length > 0) {
+      paintCommitted();
+      painted = true;
+    }
+    if (liveDirty) {
+      paintLive();
+      painted = true;
+    }
+    if (painted) for (const listener of renderedListeners) listener();
   };
 
-  const stopStore = store.subscribe(requestRender);
-  const stopViewport = viewport.onChange(renderNow); // resize clears the bitmap: redraw immediately
+  const schedule = (): void => {
+    if (rafId === 0) rafId = requestAnimationFrame(flush);
+  };
+
+  const invalidateAll = (): void => {
+    committedFull = true;
+    pending = [];
+    liveDirty = true;
+  };
+
+  const offStore = store.on('change', (change) => {
+    if (change.append && !committedFull) {
+      for (const stroke of change.added) pending.push(stroke);
+    } else {
+      committedFull = true;
+      pending = [];
+    }
+    schedule();
+  });
+
+  const offDraft = draft.on('change', () => {
+    liveDirty = true;
+    schedule();
+  });
+
+  // A resize wipes the bitmap, so repaint synchronously: no blank frame is ever shown.
+  const offCommitted = committed.onChange(() => {
+    committedFull = true;
+    pending = [];
+    paintCommitted();
+  });
+  const offLive = live.onChange(() => {
+    liveDirty = true;
+    paintLive();
+  });
 
   return {
-    requestRender,
-    renderNow,
+    requestRender() {
+      invalidateAll();
+      schedule();
+    },
+    renderNow() {
+      invalidateAll();
+      if (rafId !== 0) cancelAnimationFrame(rafId);
+      flush();
+    },
     setUnderlay(next) {
       underlay = next;
     },
@@ -164,8 +126,10 @@ export function createRenderer(viewport: Viewport, store: StrokeStore): Renderer
     },
     destroy() {
       if (rafId !== 0) cancelAnimationFrame(rafId);
-      stopStore();
-      stopViewport();
+      offStore();
+      offDraft();
+      offCommitted();
+      offLive();
       renderedListeners.clear();
     },
   };

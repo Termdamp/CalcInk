@@ -7,12 +7,25 @@ body {
   background: #fafaf7;
 }
 
-#board {
-  display: block; /* canvas is inline by default, which leaves a baseline gap and scrollbars */
+#stage {
+  position: fixed;
+  inset: 0;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 100vh;
-  height: 100dvh; /* on mobile, excludes the collapsing browser bars */
-  touch-action: none; /* we own all touch gestures on the canvas (Step 4) */
+  height: 100%;
+  display: block;
+}
+
+#committed {
+  pointer-events: none;
+}
+
+#live {
+  touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
