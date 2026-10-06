@@ -33,4 +33,11 @@ export {
   projectOnSegment,
   type Vec,
 } from './geometry';
-export { findStrokesHit, strokeHitsCircle, sweepStamps } from './eraser';
+export {
+  computePixelErase,
+  eraseCircleFromStroke,
+  findStrokesHit,
+  strokeHitsCircle,
+  sweepStamps,
+  type EraseResult,
+} from './eraser';
