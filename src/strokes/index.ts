@@ -24,3 +24,13 @@ export {
   type HistoryOptions,
   type HistoryState,
 } from './history';
+export {
+  bboxesOverlap,
+  boundsOf,
+  circleBounds,
+  distanceToSegment,
+  distanceToSegmentSquared,
+  projectOnSegment,
+  type Vec,
+} from './geometry';
+export { findStrokesHit, strokeHitsCircle, sweepStamps } from './eraser';
