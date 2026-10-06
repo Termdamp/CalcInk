@@ -1,11 +1,24 @@
-import type {Renderer, Viewport } from '../canvas';
+import type { Renderer, Viewport } from '../canvas';
+import type { History, StrokeStore } from '../strokes';
 import type { Size } from '../types';
-/** Bottom-left readout of the three sizes that matter for HiDPI. */
-export function installHud(viewport: Viewport): void {
-  const el = document.createElement('div');
-  el.className = 'hud';
-  document.body.append(el);
 
+let stack: HTMLElement | null = null;
+
+function addRow(): HTMLElement {
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'hud-stack';
+    document.body.append(stack);
+  }
+  const row = document.createElement('div');
+  row.className = 'hud';
+  stack.append(row);
+  return row;
+}
+
+/** The three sizes that matter for HiDPI. */
+export function installHud(viewport: Viewport): void {
+  const el = addRow();
   const update = (): void => {
     const { width, height } = viewport.size;
     el.textContent =
@@ -38,11 +51,12 @@ export function drawCrispnessPattern(ctx: CanvasRenderingContext2D, size: Size):
   }
 
   ctx.font = '14px system-ui, sans-serif';
-  ctx.fillText('Crisp? 0123456789 + − × ÷ = .', 32, 40);
+  ctx.fillText('Crisp? 0123456789 + − × ÷ = .', 32, 100);
   ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText(`canvas ${size.width.toFixed(0)}×${size.height.toFixed(0)} CSS px`, 32, 62);
+  ctx.fillText(`canvas ${size.width.toFixed(0)}×${size.height.toFixed(0)} CSS px`, 32, 118);
   ctx.restore();
 }
+
 /** Press G to toggle the crispness pattern beneath your ink. */
 export function installPatternToggle(renderer: Renderer): void {
   let on = false;
@@ -54,12 +68,10 @@ export function installPatternToggle(renderer: Renderer): void {
   });
 }
 
-/** Top-left readout of what kind of pointer you're using. Invaluable on a phone with no console. */
+/** What kind of pointer you're using. Invaluable on a phone with no console. */
 export function installPointerReadout(): void {
-  const el = document.createElement('div');
-  el.className = 'hud hud-top';
+  const el = addRow();
   el.textContent = 'draw to see pointer info';
-  document.body.append(el);
   window.addEventListener('pointermove', (e) => {
     if (e.buttons === 0) return; // ignore hover
     el.textContent =
@@ -68,15 +80,13 @@ export function installPointerReadout(): void {
       `coalesced ${e.getCoalescedEvents().length}`;
   });
 }
-/** Bottom-right: time from the newest pointer event to the end of the render that drew it. */
-export function installLatencyProbe(renderer: Renderer): void {
-  const el = document.createElement('div');
-  el.className = 'hud hud-right';
-  document.body.append(el);
 
+/** Time from the newest pointer event to the end of the render that drew it (software floor). */
+export function installLatencyProbe(renderer: Renderer): void {
+  const el = addRow();
   let lastInput: number | null = null;
   const record = (e: PointerEvent): void => {
-    if (e.buttons !== 0) lastInput = e.timeStamp; // only while drawing, not hover
+    if (e.buttons !== 0) lastInput = e.timeStamp;
   };
   window.addEventListener('pointerdown', record, { capture: true });
   window.addEventListener('pointermove', record, { capture: true });
@@ -92,4 +102,15 @@ export function installLatencyProbe(renderer: Renderer): void {
     const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
     el.textContent = `input→render avg ${avg.toFixed(1)} ms · p95 ${p95.toFixed(1)} ms`;
   });
+}
+
+/** Stroke count and history depth: makes "one drag = one undo step" visible. */
+export function installDocumentReadout(store: StrokeStore, history: History): void {
+  const el = addRow();
+  const update = (): void => {
+    el.textContent = `strokes ${store.strokes.length} · undo ${history.undoCount} · redo ${history.redoCount}`;
+  };
+  update();
+  store.on('change', update);
+  history.on('change', update);
 }

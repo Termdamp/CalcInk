@@ -1,10 +1,18 @@
 import './style.css';
 import { attachInput, createRenderer, createViewport } from './canvas';
-import { AddStrokeCommand, createDraft, createHistory, createIdGenerator, createStrokeStore } from './strokes';
-import { installHud, installPatternToggle, installPointerReadout } from './ui/debug';
+import { createDraft, createHistory, createIdGenerator, createStrokeStore } from './strokes';
+import {
+  installDocumentReadout,
+  installHud,
+  installLatencyProbe,
+  installPatternToggle,
+  installPointerReadout,
+} from './ui/debug';
+import { createEraserCursor } from './ui/eraserCursor';
+import { createToolbar } from './ui/toolbar';
+import { createToolController } from './ui/tools';
 
-const history = createHistory(store);
-const STROKE_WIDTH = 4;
+const ERASER_RADIUS = 12; // CSS px
 
 const committedCanvas = document.querySelector<HTMLCanvasElement>('#committed');
 const liveCanvas = document.querySelector<HTMLCanvasElement>('#live');
@@ -12,29 +20,22 @@ if (!committedCanvas || !liveCanvas) throw new Error('canvas layers missing from
 
 const committed = createViewport(committedCanvas);
 const live = createViewport(liveCanvas);
+const makeId = createIdGenerator();
 const store = createStrokeStore();
-const draft = createDraft(createIdGenerator());
+const draft = createDraft(makeId);
+const history = createHistory(store, { limit: 100 });
 const renderer = createRenderer({ committed, live, store, draft });
+const tools = createToolController({ store, draft, history, makeId, eraserRadius: ERASER_RADIUS });
 
-attachInput(live, {
-  start: (p) => draft.begin(p, STROKE_WIDTH),
-  move: (ps) => draft.append(ps),
-  end: () => {
-    const stroke = draft.finish();
-    if (stroke) history.execute(new AddStrokeCommand(stroke));
-  },
-  cancel: () => draft.cancel(),
-});
-window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
-  e.preventDefault();
-  if (e.shiftKey) history.redo();
-  else history.undo();
-});
+attachInput(live, tools.handlers);
+createEraserCursor(tools, ERASER_RADIUS);
+createToolbar({ tools, history, store });
 renderer.renderNow();
 
 if (import.meta.env.DEV) {
   installHud(live);
-  installPatternToggle(renderer);
+  installDocumentReadout(store, history);
   installPointerReadout();
+  installLatencyProbe(renderer);
+  installPatternToggle(renderer);
 }
